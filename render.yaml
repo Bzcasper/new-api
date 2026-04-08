@@ -85,7 +85,6 @@ services:
       # Set as a Render Secret Env Var (shown as •••••••• in dashboard).
       - key: SESSION_SECRET
         generateValue: true  # Render generates one automatically; replace with your own
-        sync: false          # Don't sync across blueprint re-runs (may rotate secret)
 
       # CRYPTO_SECRET: encrypts sensitive DB fields (channel keys, tokens).
       # Defaults to SESSION_SECRET if unset — link to same value for explicitness.
