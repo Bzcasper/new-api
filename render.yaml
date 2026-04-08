@@ -1,0 +1,255 @@
+# render.yaml — New API on Render + Cloudflare Proxy
+# Optimized for: Render Free Tier | Seattle, WA (America/Los_Angeles)
+# ===============================================================
+#
+# Deploy steps:
+#   1. Push to QuantumNous/new-api on GitHub
+#   2. Render Dashboard → Blueprints → "Create New Instance"
+#   3. Connect GitHub repo, select this file
+#   4. Generate/set SESSION_SECRET in the blueprint editor
+#   5. Render auto-provisions PostgreSQL + Redis and deploys
+#
+# Cloudflare Proxy:
+#   Point CNAME/A at <your-render-url>.onrender.com with proxy ON (orange cloud).
+#   Set SSL/TLS to "Full" in Cloudflare dashboard.
+#   Render free tier sleeps after 15 min — Cloudflare Tunnel recommended to keep alive.
+
+services:
+  - type: web
+    name: new-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon           # us-west-2, closest to Seattle
+    numInstances: 1
+
+    # Keep-alive: Render free tier spins down after 15 min idle.
+    # Render pings /api/status for health checks — this keeps the instance warm.
+    healthCheckPath: /api/status
+    # Set a low idleTimeout so Render doesn't kill it too aggressively.
+    # Note: free tier has limited configurability here; rely on healthCheckPath.
+
+    # Start command inherited from Dockerfile ENTRYPOINT
+    # (no overrides needed)
+
+    envVars:
+      # ══════════════════════════════════════════════════════
+      # 1. BASIC CONFIGURATION
+      # ══════════════════════════════════════════════════════
+      - key: PORT
+        value: "3000"
+      - key: TZ
+        value: America/Los_Angeles   # Seattle, WA — all logs/billing use this timezone
+      - key: GIN_MODE
+        value: release
+      # VERSION: leave unset — Dockerfile injects it from ./VERSION at build time
+
+      # ══════════════════════════════════════════════════════
+      # 2. DATABASE — Render PostgreSQL (auto-injected below)
+      #    Pool tuned for Render Free: 512MB–1GB RAM per instance
+      # ══════════════════════════════════════════════════════
+      - fromDatabase:
+          name: new-api-db
+          property: connectionString
+
+      - key: SQL_MAX_IDLE_CONNS
+        value: "10"          # Conservative: prevents conn exhaustion on low RAM
+      - key: SQL_MAX_OPEN_CONNS
+        value: "25"          # Free tier can't sustain high concurrency; cap here
+      - key: SQL_MAX_LIFETIME
+        value: "120"         # Recycle stale conns every 2 min (avoids PG conn timeout)
+
+      # LOG_SQL_DSN: leave unset — use same DB for everything on free tier
+
+      # ══════════════════════════════════════════════════════
+      # 3. CACHE — Render Redis (auto-injected below)
+      #    Enables memory caching + session store; falls back to in-process if absent
+      # ══════════════════════════════════════════════════════
+      - fromRedis:
+          name: new-api-redis
+          property: connectionString
+
+      - key: REDIS_POOL_SIZE
+        value: "5"           # Low concurrency on free tier
+      - key: MEMORY_CACHE_ENABLED
+        value: "true"        # New-API docs: auto-enabled when Redis is present
+      - key: SYNC_FREQUENCY
+        value: "60"          # Sync cache → DB every 60s; balances freshness vs. CPU
+      - key: BATCH_UPDATE_ENABLED
+        value: "true"        # Aggregate DB writes — reduces load significantly
+      - key: BATCH_UPDATE_INTERVAL
+        value: "10"          # Flush batched writes every 10s
+
+      # ══════════════════════════════════════════════════════
+      # 4. SECURITY — REQUIRED
+      # ══════════════════════════════════════════════════════
+      # SESSION_SECRET: used to sign session cookies + CSRF tokens.
+      # Must be a strong random value — NOT "random_string" or the app refuses to start.
+      # Generate locally with: openssl rand -hex 32
+      # Set as a Render Secret Env Var (shown as •••••••• in dashboard).
+      - key: SESSION_SECRET
+        generateValue: true  # Render generates one automatically; replace with your own
+        sync: false          # Don't sync across blueprint re-runs (may rotate secret)
+
+      # CRYPTO_SECRET: encrypts sensitive DB fields (channel keys, tokens).
+      # Defaults to SESSION_SECRET if unset — link to same value for explicitness.
+      - key: CRYPTO_SECRET
+        fromService:
+          type: web
+          name: new-api
+          envVarKey: SESSION_SECRET
+
+      # ══════════════════════════════════════════════════════
+      # 5. RATE LIMITING — critical on free tier (no DDoS protection)
+      #    Per-IP limits; apply to both API and web UI endpoints
+      # ══════════════════════════════════════════════════════
+      - key: GLOBAL_API_RATE_LIMIT_ENABLE
+        value: "true"
+      - key: GLOBAL_API_RATE_LIMIT
+        value: "120"         # 120 req/IP per window — generous for self-use
+      - key: GLOBAL_API_RATE_LIMIT_DURATION
+        value: "60"          # 60-second window
+
+      - key: GLOBAL_WEB_RATE_LIMIT_ENABLE
+        value: "true"
+      - key: GLOBAL_WEB_RATE_LIMIT
+        value: "30"          # Web UI: less traffic expected
+      - key: GLOBAL_WEB_RATE_LIMIT_DURATION
+        value: "60"
+
+      - key: CRITICAL_RATE_LIMIT_ENABLE
+        value: "true"        # Protect login, token creation, channel add
+      - key: CRITICAL_RATE_LIMIT
+        value: "10"          # 10 critical ops per window
+      - key: CRITICAL_RATE_LIMIT_DURATION
+        value: "600"         # 10-minute window for sensitive operations
+
+      # ══════════════════════════════════════════════════════
+      # 6. RELAY / PROXY — upstream channel calls
+      # ══════════════════════════════════════════════════════
+      - key: RELAY_TIMEOUT
+        value: "120"         # 2 min — long enough for Grok/Claude; avoids zombie conns
+      - key: STREAMING_TIMEOUT
+        value: "300"         # 5 min — streaming completions can take time
+      - key: RELAY_MAX_IDLE_CONNS
+        value: "50"          # Free tier: cap total idle connections
+      - key: RELAY_MAX_IDLE_CONNS_PER_HOST
+        value: "10"          # Cap per upstream host (prevents conn saturation)
+      - key: MAX_FILE_DOWNLOAD_MB
+        value: "64"          # Default: sufficient for model responses
+      - key: MAX_REQUEST_BODY_MB
+        value: "128"         # Protect against zip bombs / OOM
+      - key: STREAM_SCANNER_MAX_BUFFER_MB
+        value: "64"          # SSE buffer cap per stream
+
+      # ══════════════════════════════════════════════════════
+      # 7. CHANNEL MANAGEMENT — background health checks
+      #    DISABLED on free tier: saves CPU, avoids waking the instance
+      #    You can trigger manual health checks from the UI when needed.
+      # ══════════════════════════════════════════════════════
+      - key: CHANNEL_UPDATE_FREQUENCY
+        value: "0"           # 0 = disabled; re-enable via UI or env if on paid tier
+      - key: CHANNEL_TEST_FREQUENCY
+        value: "0"           # 0 = disabled; manual test from UI only
+      - key: CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED
+        value: "false"       # Disable background model-list sync (saves bandwidth)
+
+      # ══════════════════════════════════════════════════════
+      # 8. MODEL & REQUEST PROCESSING
+      # ══════════════════════════════════════════════════════
+      - key: FORCE_STREAM_OPTION
+        value: "true"         # Default: ensures usage stats come through in streams
+      - key: CountToken
+        value: "true"         # Enable local token counting for accurate billing
+      - key: GET_MEDIA_TOKEN
+        value: "true"         # Count image/audio tokens in streaming mode
+      - key: GET_MEDIA_TOKEN_NOT_STREAM
+        value: "true"        # Count image/audio tokens in non-streaming mode
+
+      # ══════════════════════════════════════════════════════
+      # 9. ASYNCHRONOUS TASKS — Midjourney, Suno, etc.
+      #    Free tier: keep ON (Task Query Limit is on-demand, not a cron)
+      # ══════════════════════════════════════════════════════
+      - key: UPDATE_TASK
+        value: "true"
+      - key: TASK_QUERY_LIMIT
+        value: "200"         # Cap per poll to limit DB queries
+      - key: TASK_TIMEOUT_MINUTES
+        value: "1440"        # 24h timeout — auto-refunds on failure
+
+      # ══════════════════════════════════════════════════════
+      # 10. SUBSCRIPTION CACHE — reduces DB reads for quota checks
+      # ══════════════════════════════════════════════════════
+      - key: SUBSCRIPTION_PLAN_CACHE_TTL
+        value: "300"         # 5 min: plan info changes infrequently
+      - key: SUBSCRIPTION_PLAN_INFO_CACHE_TTL
+        value: "120"         # 2 min: user quota details
+      - key: SUBSCRIPTION_PLAN_CACHE_CAP
+        value: "1000"        # Cap entries to limit Redis memory usage
+      - key: SUBSCRIPTION_PLAN_INFO_CACHE_CAP
+        value: "2000"
+
+      # ══════════════════════════════════════════════════════
+      # 11. ERROR LOGGING
+      # ══════════════════════════════════════════════════════
+      - key: ERROR_LOG_ENABLED
+        value: "true"        # Show errors in UI for debugging
+
+      # ══════════════════════════════════════════════════════
+      # 12. METADATA SYNC — model/vendor metadata from upstream
+      # ══════════════════════════════════════════════════════
+      - key: SYNC_HTTP_TIMEOUT_SECONDS
+        value: "10"
+      - key: SYNC_HTTP_RETRY
+        value: "3"
+      - key: SYNC_HTTP_MAX_MB
+        value: "10"
+
+      # ══════════════════════════════════════════════════════
+      # 13. SELF-USE MODE
+      #     Set in the UI after first deployment (System Settings → Mode → Self-use).
+      #     Once enabled: no public registration; all access via API tokens.
+      #
+      # 14. USER/TOKEN MANAGEMENT
+      #     GENERATE_DEFAULT_TOKEN: disabled (self-use mode uses manual token creation)
+      #     Not needed as env var — configure in UI after first deploy.
+      #
+      # 15. NOTIFICATION LIMITS
+      #     Defaults are fine for self-use: 10 min window, 3 notifications max.
+      #     Leave unset to use app defaults.
+      #
+      # 16. ANALYTICS (optional — leave unset)
+      #     UMAMI_WEBSITE_ID / GOOGLE_ANALYTICS_ID: add via Render dashboard if wanted
+      #
+      # 17. FRONTEND CONFIG
+      #     VITE_REACT_APP_SERVER_URL: not needed — backend handles routing
+      #
+      # 18. DEBUG / PROFILING — DISABLED in production
+      #     DEBUG, GIN_MODE=release, ENABLE_PPROF: all off by default / set above
+      #
+      # 19. TLS / CERT VERIFICATION
+      #     TLS_INSECURE_SKIP_VERIFY: false (default) — keep ON for security
+      #
+      # 20. PYROSCOPE, LINUXDO_OAUTH, AZURE, COHERE, DIFY
+      #     Not used — leave unset.
+      # ══════════════════════════════════════════════════════
+
+      # ── Auto-injected by Render ──────────────────────────
+      - key: GITHUB_SHA
+        sync: false          # Don't overwrite on re-deploys
+
+# ══════════════════════════════════════════════════════════════
+# MANAGED SERVICES
+# ══════════════════════════════════════════════════════════════
+
+databases:
+  - name: new-api-db
+    plan: free
+    databaseName: new_api
+    ipAllowList: []
+    # PostgreSQL version: Render default (latest stable)
+
+redis:
+  name: new-api-redis
+    plan: free
+    ipAllowList: []
