@@ -45,40 +45,36 @@ services:
       # VERSION: leave unset — Dockerfile injects it from ./VERSION at build time
 
       # ══════════════════════════════════════════════════════
-      # 2. DATABASE — Render PostgreSQL (auto-injected below)
-      #    Pool tuned for Render Free: 512MB–1GB RAM per instance
+      # 2. DATABASE — Supabase PostgreSQL
       # ══════════════════════════════════════════════════════
-      - fromDatabase:
-          name: new-api-db
-          property: connectionString
+      - key: SQL_DSN
+        value: postgresql://postgres.hghngivngwvxbbnhhwfd:[YOUR-PASSWORD]@aws-1-us-east-1.pooler.supabase.com:6543/postgres
 
       - key: SQL_MAX_IDLE_CONNS
-        value: "10"          # Conservative: prevents conn exhaustion on low RAM
+        value: "10"
       - key: SQL_MAX_OPEN_CONNS
-        value: "25"          # Free tier can't sustain high concurrency; cap here
+        value: "25"
       - key: SQL_MAX_LIFETIME
-        value: "120"         # Recycle stale conns every 2 min (avoids PG conn timeout)
+        value: "120"
 
       # LOG_SQL_DSN: leave unset — use same DB for everything on free tier
 
       # ══════════════════════════════════════════════════════
-      # 3. CACHE — Render Redis (auto-injected below)
-      #    Enables memory caching + session store; falls back to in-process if absent
+      # 3. CACHE — Redis (external)
       # ══════════════════════════════════════════════════════
-      - fromRedis:
-          name: new-api-redis
-          property: connectionString
+      - key: REDIS_CONN_STRING
+        value: redis://default:U8Ka6TMNuXYlnVNCbhu3V2BhvosSg0p1@redis-10849.c273.us-east-1-2.ec2.cloud.redislabs.com:10849
 
       - key: REDIS_POOL_SIZE
-        value: "5"           # Low concurrency on free tier
+        value: "5"
       - key: MEMORY_CACHE_ENABLED
-        value: "true"        # New-API docs: auto-enabled when Redis is present
+        value: "true"
       - key: SYNC_FREQUENCY
-        value: "60"          # Sync cache → DB every 60s; balances freshness vs. CPU
+        value: "60"
       - key: BATCH_UPDATE_ENABLED
-        value: "true"        # Aggregate DB writes — reduces load significantly
+        value: "true"
       - key: BATCH_UPDATE_INTERVAL
-        value: "10"          # Flush batched writes every 10s
+        value: "10"
 
       # ══════════════════════════════════════════════════════
       # 4. SECURITY — REQUIRED
@@ -242,14 +238,4 @@ services:
 # MANAGED SERVICES
 # ══════════════════════════════════════════════════════════════
 
-databases:
-  - name: new-api-db
-    plan: free
-    databaseName: new_api
-    ipAllowList: []
-    # PostgreSQL version: Render default (latest stable)
-
-redis:
-  name: new-api-redis
-    plan: free
-    ipAllowList: []
+# Managed services removed: using external Supabase.
