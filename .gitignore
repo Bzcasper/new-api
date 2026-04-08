@@ -36,3 +36,6 @@ data/
 render.yaml
 render-private.env
 deploy-secrets/
+scripts/
+cloudflare-worker/
+render.yaml.bak
