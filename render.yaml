@@ -48,7 +48,7 @@ services:
       # 2. DATABASE — Supabase PostgreSQL
       # ══════════════════════════════════════════════════════
       - key: SQL_DSN
-        value: postgresql://postgres.hghngivngwvxbbnhhwfd:[YOUR-PASSWORD]@aws-1-us-east-1.pooler.supabase.com:6543/postgres
+        value: postgresql://postgres.hghngivngwvxbbnhhwfd:U8Ka6TMNuXYlnVNCbhu3V2BhvosSg0p1@aws-1-us-east-1.pooler.supabase.com:6543/postgres
 
       - key: SQL_MAX_IDLE_CONNS
         value: "10"
