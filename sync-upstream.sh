@@ -1,7 +1,7 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-# sync-upstream.sh — Pull latest from QuantumNous/new-api
-#                    and keep your private render config safe
+# sync-upstream.sh — Pull latest from Calcium-Ion/new-api
+# and keep your private render config safe
 # ═══════════════════════════════════════════════════════════════
 set -e
 

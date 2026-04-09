@@ -86,6 +86,7 @@ services:
       - key: SESSION_SECRET
         generateValue: true  # Render generates one automatically; replace with your own
 
+
       # CRYPTO_SECRET: encrypts sensitive DB fields (channel keys, tokens).
       # Defaults to SESSION_SECRET if unset — link to same value for explicitness.
       - key: CRYPTO_SECRET
